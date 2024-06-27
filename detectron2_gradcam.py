@@ -1,4 +1,4 @@
-from gradcam import GradCAM, GradCamPlusPlus
+from .gradcam import GradCAM, GradCamPlusPlus
 import detectron2.data.transforms as T
 import torch
 from detectron2.checkpoint import DetectionCheckpointer
@@ -12,38 +12,17 @@ class Detectron2GradCAM():
   """
       Attributes
     ----------
-    config_file : str
-        detectron2 model config file path
-    cfg_list : list
-        List of additional model configurations
-    root_dir : str [optional]
-        directory of coco.josn and dataset images for custom dataset registration
-    custom_dataset : str [optional]
-        Name of the custom dataset to register
+    cfg : CfgNode
+        detectron2 model config
+    model : detectron2 GeneralizedRCNN Model
+        A model using the detectron2 API for inferencing
     """
-  def __init__(self, config_file, cfg_list, img_path, root_dir=None, custom_dataset=None):
-      # load config from file
-      cfg = get_cfg()
-      cfg.merge_from_file(config_file)
-
-      if custom_dataset:
-          register_coco_instances(custom_dataset, {}, root_dir + "coco.json", root_dir)
-          cfg.DATASETS.TRAIN = (custom_dataset,)
-          MetadataCatalog.get(custom_dataset)
-          DatasetCatalog.get(custom_dataset)
-
-      if torch.cuda.is_available():
-          cfg.MODEL.DEVICE = "cuda"
-      else:
-          cfg.MODEL.DEVICE = "cpu"
-
-      cfg.merge_from_list(cfg_list)
-      cfg.freeze()
+  def __init__(self, cfg, model):
       self.cfg =  cfg
-      self._set_input_image(img_path)
+      self.model = model
 
-  def _set_input_image(self, img_path):
-      self.image = read_image(img_path, format="BGR")
+  def _set_input_image(self, image):
+      self.image = image
       self.image_height, self.image_width = self.image.shape[:2]
       transform_gen = T.ResizeShortestEdge(
           [self.cfg.INPUT.MIN_SIZE_TEST, self.cfg.INPUT.MIN_SIZE_TEST], self.cfg.INPUT.MAX_SIZE_TEST
@@ -51,14 +30,14 @@ class Detectron2GradCAM():
       transformed_img = transform_gen.get_transform(self.image).apply_image(self.image)
       self.input_tensor = torch.as_tensor(transformed_img.astype("float32").transpose(2, 0, 1)).requires_grad_(True)
   
-  def get_cam(self, target_instance, layer_name, grad_cam_instance):
+  def get_cam(self, image, target_instance, layer_name, grad_cam_instance):
       """
       Calls the GradCAM instance
 
       Parameters
       ----------
-      img : str
-          Path to inference image
+      image: numpy.ndarray
+          inference image
       target_instance : int
           The target instance index
       layer_name : str
@@ -77,12 +56,9 @@ class Detectron2GradCAM():
       cam_orig : numpy.ndarray
         unprocessed raw cam
       """
-      model = build_model(self.cfg)
-      checkpointer = DetectionCheckpointer(model)
-      checkpointer.load(self.cfg.MODEL.WEIGHTS)
-
+      self._set_input_image(image)
       input_image_dict = {"image": self.input_tensor, "height": self.image_height, "width": self.image_width}
-      grad_cam = grad_cam_instance(model, layer_name)
+      grad_cam = grad_cam_instance(self.model, layer_name)
     
       with grad_cam as cam:
         cam, cam_orig, output = cam(input_image_dict, target_instance=target_instance)
